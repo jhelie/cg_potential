@@ -39,16 +39,17 @@ density calculation
   You can specify which particles to take into account for the calculation of the total
   charge density by supplying a file via the --charges option. Each line of this file
   should follow the format (without quotation marks):
-   -> 'group_name,colour,charge_name,charge,MDAnalysis selection string for charge'
+   -> 'label,value,MDAnalysis selection string'
 
   The absolute charge for each group will be plotted on the charge density profile. The
   group colour must be specified for each charge.
   
   By default the charged are defined as follows:
-   -> ions,#52A3CC,Na+,1,resname NA+
-   -> ions,#52A3CC,CL-,-1,resname CL-
-   -> lipids,#b2182b,-1,phosphate,name PO4
-   -> lipids,#b2182b,1,amine_choline,name NH3 or name NC3
+   -> Na+,1,name Na+
+   -> Cl-,-1,name CL-
+   -> PO4,-1,name PO4
+   -> NC3,1,name NC3
+   -> NH3,1,name NH3
   (note that the MDAnalysis selection string should not contain any commas)
 
 
@@ -89,7 +90,7 @@ Option	      Default  	Description
  
 Density profile options
 -----------------------------------------------------
---charges		: definition of charged particles, see 'DESCRIPTION' 
+--charges		: definition of charged particles, see 'DESCRIPTION'  [TO DO]
 --slices	[200] 	: number of slizes along z
 
 Electrostatic potential
@@ -148,8 +149,8 @@ args.chargesfilename = args.chargesfilename[0]
 args.slices = args.slices[0]
 ##electrostatic potential
 args.er = args.er[0]
-args.rs = args.rs[0]
-args.rc = args.rc[0]
+args.rs = args.rs[0]/float(10)				#conversion to nm for unit consistency
+args.rc = args.rc[0]/float(10)				#conversion to nm for unit consistency
 
 #=========================================================================================
 # import modules (doing it now otherwise might crash before we can display the help menu!)
@@ -262,12 +263,18 @@ else:
 # FUNCTIONS DEFINITIONS
 ##########################################################################################
 
+global f_factor
+global bins
 global potential
-global potential_stats
 global charge_density
+global bins_stats
+global potential_stats
 global charge_density_stats
-potential = np.zeros((nb_frames_to_process, args.slices))
-charge_density = np.zeros((nb_frames_to_process, args.slices))
+
+f_factor = 138.935485/float(args.er)
+bins_stats = {}
+bins_stats["avg"] = np.zeros(args.slices)
+bins_stats["std"] = np.zeros(args.slices)
 potential_stats = {}
 potential_stats["avg"] = np.zeros(args.slices)
 potential_stats["std"] = np.zeros(args.slices)
@@ -366,77 +373,22 @@ def load_MDA_universe():
 		frames_to_process = map(lambda f:f_start + args.frames_dt*f, range(0,(f_end - f_start)//args.frames_dt+tmp_offset))
 		nb_frames_to_process = len(frames_to_process)
 
-	#check the leaflet selection string is valid
-	test_beads = U.selectAtoms(leaflet_sele_string)
-	if test_beads.numberOfAtoms() == 0:
-		print "Error: invalid selection string '" + str(leaflet_sele_string) + "'"
-		print "-> no lipid particles selected, check the --leaflets and/or --beads options."
-		sys.exit(1)
+	#check 'bilayer' selection (only useful to center the z coordinates)
+	#-------------------------------------------------------------------
+	bilayer = U.selectAtoms("name PO4")
 
-	#create selection: particles density
-	#-----------------------------------
-	water_pres = False
-	particles_pres = False
-	
-	#check for presence of each particle
-	for part in particles_def["labels"]:
-		particles_def["sele"][part] = U.selectAtoms(particles_def["sele_string"][part])
-		if particles_def["sele"][part].numberOfAtoms() == 0:
-			print " ->warning: particle selection string '" + str(particles_def["sele_string"][part]) + "' returned 0 atoms."
-		else:
-			particles_pres = True
-			if part == "water":
-				water_pres = True
-	if not particles_pres:
-		print "Error: none of the specified particles was found in the system, check your --particles option."
-		sys.exit(1)
-				
-	#check for the presence of protein
-	#---------------------------------
-	test_prot = U.selectAtoms("protein")
-	if protein_pres:
-		if test_prot.numberOfAtoms() == 0:
-			print "Error: no proteins found in the system, check your --proteins option (set it to 'no' if there are no proteins)."
-			sys.exit(1)
-	else:
-		if test_prot.numberOfAtoms() > 0:
-			print " ->warning: proteins have been detected in the system but the option --proteins is set to 'no'; proteins will be ignored but are likely to influence the density profiles."
-		
-	#create selection: residues density
-	#----------------------------------
-	residues_pres = False
-	if args.residuesfilename != "no":
-		for res in residues_def["labels"]:
-			residues_def["sele"][res] = U.selectAtoms(residues_def["sele_string"][res])
-			if residues_def["sele"][res].numberOfAtoms() == 0:
-				print " ->warning: residues selection string '" + str(residues_def["sele_string"][res]) + "' returned 0 atoms."
-			else:
-				residues_pres = True		
-		if not residues_pres:
-			print "Error: none of the specified residues was found in the system, check your --residues option."
-			sys.exit(1)
-	
 	#create charged particles selections
 	#-----------------------------------
 	charge_pres = False
-	if args.chargesfilename != "no":
-		for charge_g in charges_groups.keys():
-			for q in charges_groups[charge_g]["names"]:
-				charges_groups[charge_g]["sele"][q] = U.selectAtoms(charges_groups[charge_g]["sele_string"][q])
-			if charges_groups[charge_g]["sele"][q].numberOfAtoms() == 0:
-				print " ->warning: charge selection string '" + str(charges_groups[charge_g]["sele_string"][q]) + "' returned 0 atoms."
-			else:
-				charge_pres = True
-		if not charge_pres:
-			print "Error: no charged particles found, use '--charges no' or supply correct charges definition."
-			sys.exit(1)
-
-	#check whether the arg max is less than half the box size
-	#--------------------------------------------------------
-	if args.max_z_dist > U.dimensions[2]/float(2):
-		print "Warning: the --dist_max option (" + str(args.max_z_dist) + ") is larger than half the box size in the z direction plane (" + str(U.dimensions[2]/float(2)) + "), density profile will be truncated at " + str(U.dimensions[2]/float(2)) + " Angstrom."
-		args.max_z_dist = U.dimensions[2]/float(2)
-		bins_nb_max = int(floor(args.max_z_dist/float(args.slices_thick)))
+	for q in charges_groups.keys():
+		charges_groups[q]["sele"] = U.selectAtoms(charges_groups[q]["sele_string"])
+		if charges_groups[q]["sele"].numberOfAtoms() == 0:
+			print " ->warning: charge selection string '" + str(charges_groups[q]["sele_string"]) + "' returned 0 atoms."
+		else:
+			charge_pres = True
+	if not charge_pres:
+		print "Error: no charged particles found, try using --charges to supply correct charges definition."
+		sys.exit(1)
 		
 	return
 
@@ -444,42 +396,40 @@ def load_MDA_universe():
 # core functions
 #=========================================================================================
 
-def calculate_density(box_dim):
+def calculate_potential(f_index, box_dim):
 	
+	#define bins
+	tmp_bins = np.linspace(0,box_dim[2],args.slices+1)
+	
+	#store their z values
+	bins[f_index,:] = tmp_bins - bilayer.centerOfGeometry()[2]
+	
+	#calculate charge density in each bin
 	tmp_bins_nb = np.zeros(2*bins_nb)
 	for q in charges_groups.keys():
 		tmp_q_sele = charges_groups[q]["sele"]
 		if tmp_q_sele.numberOfAtoms() > 0:
-		
-			#center z coordinates on the bilayer center z coordinate
 			tmp_coord = tmp_q_sele.coordinates()
-			tmp_coord[:,2] -= z_middle_instant
-
-			#deal with pbc and center axis on 0
-			tmp_coord[:,0] -= (np.floor(2*tmp_coord[:,0]/float(box_dim[0])) + (1-np.sign(tmp_coord[:,0]))/float(2)) * box_dim[0]
-			tmp_coord[:,1] -= (np.floor(2*tmp_coord[:,1]/float(box_dim[1])) + (1-np.sign(tmp_coord[:,1]))/float(2)) * box_dim[1]
-			tmp_coord[:,2] -= (np.floor(2*tmp_coord[:,2]/float(box_dim[2])) + (1-np.sign(tmp_coord[:,2]))/float(2)) * box_dim[2]
-			
-			#bin particles into slices
-			bin_rel = np.floor(tmp_coord[:,2]/float(args.slices_thick)).astype(int) + int(bins_nb)
-			if len(bin_abs) > 0:
-				tmp_bins_nb += np.histogram(bin_abs, np.arange(2*bins_nb + 1))[0] * charges_groupsw]["value"]
+			tmp_bins_nb += np.histogram(tmp_coord[:,2], tmp_bins)[0] * charges_groupsw]["value"]
+	
+	
 	
 	return
-def calculate_potential(bin_q):
-	
 
-	
-	return
 def calculate_stats():
 	
-	for s in range(0, nb_frames_to_process):
+	for s in range(0, args.slices):
+		#bin z position
+		bins_stats["avg"] = np.average(bins[:,s])
+		bins_stats["std"] = np.std(bins[:,s])
+		
 		#charge density
-		
-		
+		charge_density_stats["avg"] = np.average(charge_density[:,s])
+		charge_density_stats["std"] = np.std(charge_density[:,s])	
 		
 		#potential 
-		potential_stats["avg"] = 
+		potential_stats["avg"] = np.average(potential[:,s])
+		potential_stats["std"] = np.std(potential[:,s])
 	
 	return
 
@@ -487,308 +437,7 @@ def calculate_stats():
 # outputs
 #=========================================================================================
 
-def density_write_particles():											#DONE
-
-	#sizes
-	#=====
-	for c_size in sizes_sampled + ["all sizes"]:		
-		#open files
-		if c_size == "all sizes":
-			tmp_file = '1_1_density_profile_particles_all_sizes'
-		else:
-			tmp_file = '1_1_density_profile_particles_' + str(c_size)
-		filename_xvg = os.getcwd() + '/' + str(args.output_folder) + '/1_sizes/1_particles/xvg/' + str(tmp_file) + '.xvg'
-		filename_txt = os.getcwd() + '/' + str(args.output_folder) + '/1_sizes/1_particles/xvg/' + str(tmp_file) + '.txt'
-		output_txt = open(filename_txt, 'w')
-		output_xvg = open(filename_xvg, 'w')
-		
-		#general header
-		output_txt.write("@[relative particles frequency profile - written by cluster_density_profile v" + str(version_nb) + "]\n")
-		output_txt.write("@Use this file as the argument of the -c option of the script 'xvg_animate' in order to make a time lapse movie of the data in " + str(tmp_file) + ".xvg.\n")
-		output_xvg.write("# [relative particles frequency profile - written by cluster_density_profile v" + str(version_nb) + "]\n")
-		output_xvg.write("# cluster detection method:\n")
-		if protein_pres:
-			output_xvg.write("#  -> nb of proteins: " + str(proteins_nb) + "\n")
-			if args.m_algorithm == "min":
-				output_xvg.write("#  -> connectivity based (min distances)\n")
-				output_xvg.write("#  -> contact cutoff = " + str(args.cutoff_connect) + " Angstrom\n")
-			elif args.m_algorithm == "cog":
-				output_xvg.write("#  -> connectivity based (cog distances)\n")
-				output_xvg.write("#  -> contact cutoff = " + str(args.cutoff_connect) + " Angstrom\n")
-			else:
-				output_xvg.write("#  -> density based (DBSCAN)\n")
-				output_xvg.write("#  -> search radius = " + str(args.dbscan_dist) + " Angstrom, nb of neighbours = " + str(args.dbscan_nb) + "\n")
-		output_xvg.write("# volume properties:\n")
-		output_xvg.write("#  -> cylinder radius: " + str(args.slices_radius) + " (Angstrom)\n")
-		output_xvg.write("#  -> slices thickness: " + str(args.slices_thick) + " (Angstrom)\n")
-		output_xvg.write("#  -> slices volume: " + str(round(slice_volume,2)) + " (Angstrom3)\n")
-		output_xvg.write("# selection statistics (% of total particles within volume [if protein: % of cluster]):\n")
-		for part in particles_def["labels"]:
-			output_xvg.write("#  -> " + str(part) + ": " + str(sizes_coverage["particles"]["avg"][c_size][part]) + "% (" + str(sizes_coverage["particles"]["std"][c_size][part]) + ")\n")
-		if protein_pres:
-			output_xvg.write("# nb of clusters which contributed to this profile:\n")
-			output_xvg.write("# -> weight = " + str(sizes_nb_clusters[c_size]) + "\n")
-		else:
-			output_xvg.write("# nb of frames which contributed to this profile:\n")
-			output_xvg.write("# -> weight = " + str(nb_frames_to_process) + "\n")
-		
-		#xvg metadata
-		if c_size == "all sizes":
-			output_xvg.write("@ title \"Relative particles frequency along z around TM clusters\"\n")
-		else:
-			output_xvg.write("@ title \"Relative particles frequency along z around TM clusters of size " + str(c_size) + "\"\n")
-		output_xvg.write("@ xaxis label \"z distance to bilayer center (Angstrom)\"\n")
-		output_xvg.write("@ yaxis label \"relative particles frequency (Angstrom-3)\"\n")
-		output_xvg.write("@ autoscale ONREAD xaxes\n")
-		output_xvg.write("@ TYPE XY\n")
-		output_xvg.write("@ view 0.15, 0.15, 0.95, 0.85\n")
-		output_xvg.write("@ legend on\n")
-		output_xvg.write("@ legend box on\n")
-		output_xvg.write("@ legend loctype view\n")
-		output_xvg.write("@ legend 0.98, 0.8\n")
-		output_xvg.write("@ legend length " + str(len(particles_def["labels"])) + "\n")
-		for part_index in range(0,len(particles_def["labels"])):
-			part = particles_def["labels"][part_index]
-			output_xvg.write("@ s" + str(part_index) + " legend \"" + str(part) + "\"\n")
-			output_txt.write(str(tmp_file) + "," + str(part_index+1) + "," + str(part) + "," + mcolors.rgb2hex(mcolorconv.to_rgb(particles_def["colour"][part])) + "\n")
-		output_txt.close()
-		
-		#data
-		for n in range(0,2*bins_nb):
-			results = str(bins_labels[n])
-			for part_index in range(0,len(particles_def["labels"])):
-				part = particles_def["labels"][part_index]
-				results += "	" + "{:.6e}".format(density_particles_sizes_pc[c_size][part][n])
-			output_xvg.write(results + "\n")	
-		output_xvg.close()
-				
-	#groups
-	#======
-	if args.cluster_groups_file != "no":
-		for g_index in groups_sampled:
-			#open files
-			tmp_file = '2_1_density_profile_particles_' + str(groups_labels[g_index])
-			filename_xvg = os.getcwd() + '/' + str(args.output_folder) + '/2_groups/1_particles/xvg/' + str(tmp_file) + '.xvg'
-			filename_txt = os.getcwd() + '/' + str(args.output_folder) + '/2_groups/1_particles/xvg/' + str(tmp_file) + '.txt'
-			output_txt = open(filename_txt, 'w')
-			output_xvg = open(filename_xvg, 'w')
-			
-			#general header
-			output_txt.write("@[relative particles frequency profile - written by cluster_density_profile v" + str(version_nb) + "]\n")
-			output_txt.write("@Use this file as the argument of the -c option of the script 'xvg_animate' in order to make a time lapse movie of the data in " + str(tmp_file) + ".xvg.\n")
-			output_xvg.write("# [relative particles frequency profile - written by cluster_density_profile v" + str(version_nb) + "]\n")
-			output_xvg.write("# cluster detection method:\n")
-			output_xvg.write("#  -> nb of proteins: " + str(proteins_nb) + "\n")
-			if args.m_algorithm == "min":
-				output_xvg.write("#  -> connectivity based (min distances)\n")
-				output_xvg.write("#  -> contact cutoff = " + str(args.cutoff_connect) + " Angstrom\n")
-			elif args.m_algorithm == "cog":
-				output_xvg.write("#  -> connectivity based (cog distances)\n")
-				output_xvg.write("#  -> contact cutoff = " + str(args.cutoff_connect) + " Angstrom\n")
-			else:
-				output_xvg.write("#  -> density based (DBSCAN)\n")
-				output_xvg.write("#  -> search radius = " + str(args.dbscan_dist) + " Angstrom, nb of neighbours = " + str(args.dbscan_nb) + "\n")
-			output_xvg.write("# volume properties:\n")
-			output_xvg.write("#  -> cylinder radius: " + str(args.slices_radius) + " (Angstrom)\n")
-			output_xvg.write("#  -> slices thickness: " + str(args.slices_thick) + " (Angstrom)\n")
-			output_xvg.write("#  -> slices volume: " + str(round(slice_volume,2)) + " (Angstrom3)\n")
-			output_xvg.write("# selection statistics (% of total particles within volume [if protein: % of cluster]):\n")
-			for part in particles_def["labels"]:
-				output_xvg.write("#  -> " + str(part) + ": " + str(groups_coverage["particles"]["avg"][g_index][part]) + "% (" + str(groups_coverage["particles"]["std"][g_index][part]) + ")\n")
-			output_xvg.write("# nb of clusters which contributed to this profile:\n")
-			output_xvg.write("# -> weight = " + str(groups_nb_clusters[g_index]) + "\n")
-			
-			#xvg metadata
-			output_xvg.write("@ title \"Relative particles frequency along z around TM clusters of sizes " + str(groups_labels[g_index]) + "\"\n")
-			output_xvg.write("@ xaxis label \"z distance to bilayer center (Angstrom)\"\n")
-			output_xvg.write("@ yaxis label \"relative particles frequency (Angstrom-3)\"\n")
-			output_xvg.write("@ autoscale ONREAD xaxes\n")
-			output_xvg.write("@ TYPE XY\n")
-			output_xvg.write("@ view 0.15, 0.15, 0.95, 0.85\n")
-			output_xvg.write("@ legend on\n")
-			output_xvg.write("@ legend box on\n")
-			output_xvg.write("@ legend loctype view\n")
-			output_xvg.write("@ legend 0.98, 0.8\n")
-			output_xvg.write("@ legend length " + str(len(particles_def["labels"])) + "\n")
-			for part_index in range(0,len(particles_def["labels"])):
-				part = particles_def["labels"][part_index]
-				output_xvg.write("@ s" + str(part_index) + " legend \"" + str(part) + "\"\n")
-				output_txt.write(str(tmp_file) + "," + str(part_index+1) + "," + str(part) + "," + mcolors.rgb2hex(mcolorconv.to_rgb(particles_def["colour"][part])) + "\n")
-			output_txt.close()
-			
-			#data
-			for n in range(0,2*bins_nb):
-				results = str(bins_labels[n])
-				for part_index in range(0,len(particles_def["labels"])):
-					part = particles_def["labels"][part_index]
-					results += "	" + "{:.6e}".format(density_particles_groups_pc[g_index][part][n])
-				output_xvg.write(results + "\n")	
-			output_xvg.close()
-
-	return
-def density_write_residues():											#DONE
-
-	#sizes
-	#=====
-	for c_size in sizes_sampled + ["all sizes"]:		
-		
-		#open files
-		if c_size == "all sizes":
-			tmp_file = '1_3_density_profile_residues_all_sizes'
-		else:
-			tmp_file = '1_3_density_profile_residues_' + str(c_size)
-		filename_xvg = os.getcwd() + '/' + str(args.output_folder) + '/1_sizes/3_residues/xvg/' + str(tmp_file) + '.xvg'
-		filename_txt = os.getcwd() + '/' + str(args.output_folder) + '/1_sizes/3_residues/xvg/' + str(tmp_file) + '.txt'
-		output_txt = open(filename_txt, 'w')
-		output_xvg = open(filename_xvg, 'w')
-		
-		#general header
-		output_txt.write("@[relative residues frequency profile - written by cluster_density_profile v" + str(version_nb) + "]\n")
-		output_txt.write("@Use this file as the argument of the -c option of the script 'xvg_animate' in order to make a time lapse movie of the data in " + str(tmp_file) + ".xvg.\n")
-		output_xvg.write("# [relative residues frequency profile - written by cluster_density_profile v" + str(version_nb) + "]\n")
-		output_xvg.write("# cluster detection method:\n")
-		output_xvg.write("#  -> nb of proteins: " + str(proteins_nb) + "\n")
-		if args.m_algorithm == "min":
-			output_xvg.write("#  -> connectivity based (min distances)\n")
-			output_xvg.write("#  -> contact cutoff = " + str(args.cutoff_connect) + " Angstrom\n")
-		elif args.m_algorithm == "cog":
-			output_xvg.write("#  -> connectivity based (cog distances)\n")
-			output_xvg.write("#  -> contact cutoff = " + str(args.cutoff_connect) + " Angstrom\n")
-		else:
-			output_xvg.write("#  -> density based (DBSCAN)\n")
-			output_xvg.write("#  -> search radius = " + str(args.dbscan_dist) + " Angstrom, nb of neighbours = " + str(args.dbscan_nb) + "\n")
-		output_xvg.write("# volume properties:\n")
-		output_xvg.write("#  -> cylinder radius: " + str(args.slices_radius) + " (Angstrom)\n")
-		output_xvg.write("#  -> slices thickness: " + str(args.slices_thick) + " (Angstrom)\n")
-		output_xvg.write("#  -> slices volume: " + str(round(slice_volume,2)) + " (Angstrom3)\n")
-		output_xvg.write("# selection statistics (% of total particles within volume [if protein: % of cluster]):\n")
-		for res in residues_def["labels"]:
-			output_xvg.write("#  -> " + str(res) + ": " + str(sizes_coverage["residues"]["avg"][c_size][res]) + "% (" + str(sizes_coverage["residues"]["std"][c_size][res]) + ")\n")
-		if protein_pres:
-			output_xvg.write("# nb of clusters which contributed to this profile:\n")
-			output_xvg.write("# -> weight = " + str(sizes_nb_clusters[c_size]) + "\n")
-		else:
-			output_xvg.write("# nb of frames which contributed to this profile:\n")
-			output_xvg.write("# -> weight = " + str(nb_frames_to_process) + "\n")
-		
-		#xvg metadata
-		if c_size == "all sizes":
-			output_xvg.write("@ title \"Relative residues frequency along z around TM clusters\"\n")
-		else:
-			output_xvg.write("@ title \"Relative residues frequency along z around TM clusters of size " + str(c_size) + "\"\n")
-		output_xvg.write("@ xaxis label \"z distance to bilayer center (Angstrom)\"\n")
-		output_xvg.write("@ yaxis label \"relative residues frequency (Angstrom-3)\"\n")
-		output_xvg.write("@ autoscale ONREAD xaxes\n")
-		output_xvg.write("@ TYPE XY\n")
-		output_xvg.write("@ view 0.15, 0.15, 0.95, 0.85\n")
-		output_xvg.write("@ legend on\n")
-		output_xvg.write("@ legend box on\n")
-		output_xvg.write("@ legend loctype view\n")
-		output_xvg.write("@ legend 0.98, 0.8\n")
-		if water_pres:
-			output_xvg.write("@ legend length " + str(len(residues_def["labels"]) + 2) + "\n")
-		else:
-			output_xvg.write("@ legend length " + str(len(residues_def["labels"]) + 1) + "\n")
-		for res_index in range(0,len(residues_def["labels"])):
-			res = residues_def["labels"][res_index]
-			output_xvg.write("@ s" + str(res_index) + " legend \"" + str(res) + "\"\n")
-			output_txt.write(str(tmp_file) + "," + str(res_index+1) + "," + str(res) + "," + mcolors.rgb2hex(mcolorconv.to_rgb(residues_def["colour"][res])) + "\n")
-		output_xvg.write("@ s" + str(len(residues_def["labels"])) + " legend \"peptide\"\n")
-		output_txt.write(str(tmp_file) + "," + str(len(residues_def["labels"]) + 1) + ",peptide," + mcolors.rgb2hex(mcolorconv.to_rgb(particles_def["colour"]["peptide"])) + "\n")
-		if water_pres:
-			output_xvg.write("@ s" + str(len(residues_def["labels"]) + 1) + " legend \"water\"\n")
-			output_txt.write(str(tmp_file) + "," + str(len(residues_def["labels"]) + 2) + ",water," + mcolors.rgb2hex(mcolorconv.to_rgb(particles_def["colour"]["water"])) + "\n")		
-		output_txt.close()
-		
-		#data
-		for n in range(0,2*bins_nb):
-			results = str(bins_labels[n])
-			for res_index in range(0,len(residues_def["labels"])):
-				res = residues_def["labels"][res_index]
-				results += "	" + "{:.6e}".format(density_residues_sizes_pc[c_size][res][n])
-			results += "	" + "{:.6e}".format(density_particles_sizes_pc[c_size]["peptide"][n])
-			if water_pres:
-				results += "	" + "{:.6e}".format(density_particles_sizes_pc[c_size]["water"][n])
-			output_xvg.write(results + "\n")	
-		output_xvg.close()
-
-	#groups
-	#======
-	if args.cluster_groups_file != "no":
-		for g_index in groups_sampled:
-
-			#open files
-			tmp_file = '2_3_density_profile_residues_' + str(groups_labels[g_index])
-			filename_xvg = os.getcwd() + '/' + str(args.output_folder) + '/2_groups/3_residues/xvg/' + str(tmp_file) + '.xvg'
-			filename_txt = os.getcwd() + '/' + str(args.output_folder) + '/2_groups/3_residues/xvg/' + str(tmp_file) + '.txt'
-			output_txt = open(filename_txt, 'w')
-			output_xvg = open(filename_xvg, 'w')
-			
-			#general header
-			output_txt.write("@[relative residues frequency profile - written by cluster_density_profile v" + str(version_nb) + "]\n")
-			output_txt.write("@Use this file as the argument of the -c option of the script 'xvg_animate' in order to make a time lapse movie of the data in " + str(tmp_file) + ".xvg.\n")
-			output_xvg.write("# [relative residues frequency profile - written by cluster_density_profile v" + str(version_nb) + "]\n")
-			output_xvg.write("# cluster detection method:\n")
-			output_xvg.write("#  -> nb of proteins: " + str(proteins_nb) + "\n")
-			if args.m_algorithm == "min":
-				output_xvg.write("#  -> connectivity based (min distances)\n")
-				output_xvg.write("#  -> contact cutoff = " + str(args.cutoff_connect) + " Angstrom\n")
-			elif args.m_algorithm == "cog":
-				output_xvg.write("#  -> connectivity based (cog distances)\n")
-				output_xvg.write("#  -> contact cutoff = " + str(args.cutoff_connect) + " Angstrom\n")
-			else:
-				output_xvg.write("#  -> density based (DBSCAN)\n")
-				output_xvg.write("#  -> search radius = " + str(args.dbscan_dist) + " Angstrom, nb of neighbours = " + str(args.dbscan_nb) + "\n")
-			output_xvg.write("# volume properties:\n")
-			output_xvg.write("#  -> cylinder radius: " + str(args.slices_radius) + " (Angstrom)\n")
-			output_xvg.write("#  -> slices thickness: " + str(args.slices_thick) + " (Angstrom)\n")
-			output_xvg.write("#  -> slices volume: " + str(round(slice_volume,2)) + " (Angstrom3)\n")
-			output_xvg.write("# selection statistics (% of total particles within volume [if protein: % of cluster]):\n")
-			for res in residues_def["labels"]:
-				output_xvg.write("#  -> " + str(res) + ": " + str(groups_coverage["residues"]["avg"][g_index][res]) + "% (" + str(groups_coverage["residues"]["std"][g_index][res]) + ")\n")
-			output_xvg.write("# nb of clusters which contributed to this profile:\n")
-			output_xvg.write("# -> weight = " + str(groups_nb_clusters[g_index]) + "\n")
-			
-			#xvg metadata
-			output_xvg.write("@ title \"Relative residues frequency along z around TM clusters of sizes " + str(groups_labels[g_index]) + "\"\n")
-			output_xvg.write("@ xaxis label \"z distance to bilayer center (Angstrom)\"\n")
-			output_xvg.write("@ yaxis label \"relative residues frequency (Angstrom-3)\"\n")
-			output_xvg.write("@ autoscale ONREAD xaxes\n")
-			output_xvg.write("@ TYPE XY\n")
-			output_xvg.write("@ view 0.15, 0.15, 0.95, 0.85\n")
-			output_xvg.write("@ legend on\n")
-			output_xvg.write("@ legend box on\n")
-			output_xvg.write("@ legend loctype view\n")
-			output_xvg.write("@ legend 0.98, 0.8\n")
-			if water_pres:
-				output_xvg.write("@ legend length " + str(len(residues_def["labels"]) + 2) + "\n")
-			else:
-				output_xvg.write("@ legend length " + str(len(residues_def["labels"]) + 1) + "\n")
-			for res_index in range(0,len(residues_def["labels"])):
-				res = residues_def["labels"][res_index]
-				output_xvg.write("@ s" + str(res_index) + " legend \"" + str(res) + "\"\n")
-				output_txt.write(str(tmp_file) + "," + str(res_index+1) + "," + str(res) + "," + mcolors.rgb2hex(mcolorconv.to_rgb(residues_def["colour"][res])) + "\n")
-			output_xvg.write("@ s" + str(len(residues_def["labels"])) + " legend \"peptide\"\n")
-			output_txt.write(str(tmp_file) + "," + str(len(residues_def["labels"]) + 1) + ",peptide," + mcolors.rgb2hex(mcolorconv.to_rgb(particles_def["colour"]["peptide"])) + "\n")
-			if water_pres:
-				output_xvg.write("@ s" + str(len(residues_def["labels"]) + 1) + " legend \"water\"\n")
-				output_txt.write(str(tmp_file) + "," + str(len(residues_def["labels"]) + 2) + ",water," + mcolors.rgb2hex(mcolorconv.to_rgb(particles_def["colour"]["water"])) + "\n")		
-			output_txt.close()
-			
-			#data
-			for n in range(0,2*bins_nb):
-				results = str(bins_labels[n])
-				for res_index in range(0,len(residues_def["labels"])):
-					res = residues_def["labels"][res_index]
-					results += "	" + "{:.6e}".format(density_residues_groups_pc[g_index][res][n])
-				results += "	" + "{:.6e}".format(density_particles_groups_pc[g_index]["peptide"][n])
-				if water_pres:
-					results += "	" + "{:.6e}".format(density_particles_groups_pc[g_index]["water"][n])
-				output_xvg.write(results + "\n")	
-			output_xvg.close()
-
-	return
-def density_write_charges():											#DONE
+def density_write_charges():
 	
 	#sizes
 	#=====
@@ -940,219 +589,7 @@ def density_write_charges():											#DONE
 
 	return
 
-def density_graph_particles():											#DONE
-			
-	#sizes
-	#=====
-	for c_size in sizes_sampled + ["all sizes"]:
-		#filenames
-		if c_size == "all sizes":
-			filename_png = os.getcwd() + '/' + str(args.output_folder) + '/1_sizes/1_particles/png/1_1_density_profile_particles_all_sizes.png'
-			filename_svg = os.getcwd() + '/' + str(args.output_folder) + '/1_sizes/1_particles/1_1_density_profile_particles_all_sizes.svg'
-		else:
-			filename_png = os.getcwd() + '/' + str(args.output_folder) + '/1_sizes/1_particles/png/1_1_density_profile_particles_' + str(c_size) +'.png'
-			filename_svg = os.getcwd() + '/' + str(args.output_folder) + '/1_sizes/1_particles/1_1_density_profile_particles_' + str(c_size) +'.svg'
-
-		#create figure
-		fig = plt.figure(figsize=(8, 6.2))
-		if c_size == "all sizes":
-			fig.suptitle("Relative particles frequency along z around TM clusters")
-		else:
-			fig.suptitle("Relative particles frequency along z around TM clusters of size " + str(c_size))
-
-		#plot data
-		ax = fig.add_subplot(111)
-		for part in particles_def["labels"]:
-			plt.plot(range(0,2*bins_nb), density_particles_sizes_pc[c_size][part], color = particles_def["colour"][part], label = str(part))
-		plt.vlines(np.floor(z_upper/float(args.slices_thick)) + bins_nb, 0, max_density_particles_pc, linestyles = 'dashed')
-		plt.vlines(np.floor(z_lower/float(args.slices_thick)) + bins_nb, 0, max_density_particles_pc, linestyles = 'dashed')
-		plt.vlines(bins_nb, 0, max_density_particles_pc, linestyles = 'dashdot')
-		fontP.set_size("small")
-		ax.legend(prop=fontP)
-		plt.xlabel('z distance to bilayer center [$\AA$]')
-		plt.ylabel('relative particles frequency [$\AA^{-3}$]')
-		
-		#save figure
-		ax.set_xlim(0, 2*bins_nb)
-		ax.set_ylim(0, max_density_particles_pc)
-		ax.spines['top'].set_visible(False)
-		ax.spines['right'].set_visible(False)
-		ax.xaxis.set_ticks_position('bottom')
-		ax.yaxis.set_ticks_position('left')
-		ax.xaxis.set_major_locator(MaxNLocator(nbins=10))
-		ax.yaxis.set_major_locator(MaxNLocator(nbins=7))
-		xlabel = ax.get_xticks().tolist()
-		for tick_index in range(0,len(xlabel)):
-			xlabel[tick_index] -= bins_nb
-		ax.set_xticklabels(xlabel)
-		ax.xaxis.labelpad = 20
-		ax.yaxis.labelpad = 20
-		plt.setp(ax.xaxis.get_majorticklabels(), fontsize = "small")
-		plt.setp(ax.yaxis.get_majorticklabels(), fontsize = "small")
-		plt.subplots_adjust(top = 0.9, bottom = 0.15, left = 0.15, right = 0.85)
-		fig.savefig(filename_png)
-		fig.savefig(filename_svg)
-		plt.close()
-
-	#groups
-	#======
-	if args.cluster_groups_file != "no":
-		for g_index in groups_sampled:
-			#filenames
-			filename_png = os.getcwd() + '/' + str(args.output_folder) + '/2_groups/1_particles/png/2_1_density_profile_particles_' + str(groups_labels[g_index]) +'.png'
-			filename_svg = os.getcwd() + '/' + str(args.output_folder) + '/2_groups/1_particles/2_1_density_profile_particles_' + str(groups_labels[g_index]) +'.svg'
-	
-			#create figure
-			fig = plt.figure(figsize=(8, 6.2))
-			fig.suptitle("Relative particles frequency along z around TM clusters of sizes " + str(groups_labels[g_index]))
-	
-			#plot data
-			ax = fig.add_subplot(111)
-			for part in particles_def["labels"]:
-				plt.plot(range(0,2*bins_nb), density_particles_groups_pc[g_index][part], color = particles_def["colour"][part], label = str(part))
-			plt.vlines(np.floor(z_upper/float(args.slices_thick)) + bins_nb, 0, max_density_particles_pc, linestyles = 'dashed')
-			plt.vlines(np.floor(z_lower/float(args.slices_thick)) + bins_nb, 0, max_density_particles_pc, linestyles = 'dashed')
-			plt.vlines(bins_nb, 0, max_density_particles_pc, linestyles = 'dashdot')
-			fontP.set_size("small")
-			ax.legend(prop=fontP)
-			plt.xlabel('z distance to bilayer center [$\AA$]')
-			plt.ylabel('relative particles frequency [$\AA^{-3}$]')
-			
-			#save figure
-			ax.set_xlim(0, 2*bins_nb)
-			ax.set_ylim(0, max_density_particles_pc)
-			ax.spines['top'].set_visible(False)
-			ax.spines['right'].set_visible(False)
-			ax.xaxis.set_ticks_position('bottom')
-			ax.yaxis.set_ticks_position('left')
-			ax.xaxis.set_major_locator(MaxNLocator(nbins=10))
-			ax.yaxis.set_major_locator(MaxNLocator(nbins=7))
-			xlabel = ax.get_xticks().tolist()
-			for tick_index in range(0,len(xlabel)):
-				xlabel[tick_index] -= bins_nb
-			ax.set_xticklabels(xlabel)
-			ax.xaxis.labelpad = 20
-			ax.yaxis.labelpad = 20
-			plt.setp(ax.xaxis.get_majorticklabels(), fontsize = "small")
-			plt.setp(ax.yaxis.get_majorticklabels(), fontsize = "small")
-			plt.subplots_adjust(top = 0.9, bottom = 0.15, left = 0.15, right = 0.85)
-			fig.savefig(filename_png)
-			fig.savefig(filename_svg)
-			plt.close()
-	
-	return
-def density_graph_residues():											#DONE
-			
-	#sizes
-	#=====
-	for c_size in sizes_sampled + ["all sizes"]:		
-
-		#filenames
-		if c_size == "all sizes":
-			filename_png = os.getcwd() + '/' + str(args.output_folder) + '/1_sizes/3_residues/png/1_3_density_profile_residues_all_sizes.png'
-			filename_svg = os.getcwd() + '/' + str(args.output_folder) + '/1_sizes/3_residues/1_3_density_profile_residues_all_sizes.svg'		
-		else:
-			filename_png = os.getcwd() + '/' + str(args.output_folder) + '/1_sizes/3_residues/png/1_3_density_profile_residues_' + str(c_size) +'.png'
-			filename_svg = os.getcwd() + '/' + str(args.output_folder) + '/1_sizes/3_residues/1_3_density_profile_residues_' + str(c_size) +'.svg'
-
-		#create figure
-		fig = plt.figure(figsize=(8, 6.2))
-		if c_size == "all sizes":
-			fig.suptitle("Relative residues frequency along z around TM clusters")
-		else:
-			fig.suptitle("Relative residues frequency along z around TM clusters of size " + str(c_size))
-
-		#plot data
-		ax = fig.add_subplot(111)
-		for res in residues_def["labels"]:
-			plt.plot(range(0,2*bins_nb), density_residues_sizes_pc[c_size][res], color = residues_def["colour"][res], label = str(res))
-		plt.plot(range(0,2*bins_nb), density_particles_sizes_pc[c_size]["peptide"], color = particles_def["colour"]["peptide"], label = "peptide")
-		if water_pres:
-			plt.plot(range(0,2*bins_nb), density_particles_sizes_pc[c_size]["water"], color = particles_def["colour"]["water"], label = "water")
-		plt.vlines(np.floor(z_upper/float(args.slices_thick)) + bins_nb, 0, max_density_residues_pc, linestyles = 'dashed')
-		plt.vlines(np.floor(z_lower/float(args.slices_thick)) + bins_nb, 0, max_density_residues_pc, linestyles = 'dashed')
-		plt.vlines(bins_nb, 0, max_density_residues_pc, linestyles = 'dashdot')
-		fontP.set_size("small")
-		ax.legend(prop=fontP)
-		plt.xlabel('z distance to bilayer center [$\AA$]')
-		plt.ylabel('relative residues frequency [$\AA^{-3}$]')
-		
-		#save figure
-		ax.set_xlim(0, 2*bins_nb)
-		ax.set_ylim(0, max_density_residues_pc)
-		ax.spines['top'].set_visible(False)
-		ax.spines['right'].set_visible(False)
-		ax.xaxis.set_ticks_position('bottom')
-		ax.yaxis.set_ticks_position('left')
-		ax.xaxis.set_major_locator(MaxNLocator(nbins=10))
-		ax.yaxis.set_major_locator(MaxNLocator(nbins=7))
-		xlabel = ax.get_xticks().tolist()
-		for tick_index in range(0,len(xlabel)):
-			xlabel[tick_index] -= bins_nb
-		ax.set_xticklabels(xlabel)
-		ax.xaxis.labelpad = 20
-		ax.yaxis.labelpad = 20
-		plt.setp(ax.xaxis.get_majorticklabels(), fontsize = "small")
-		plt.setp(ax.yaxis.get_majorticklabels(), fontsize = "small")
-		plt.subplots_adjust(top = 0.9, bottom = 0.15, left = 0.15, right = 0.85)
-		fig.savefig(filename_png)
-		fig.savefig(filename_svg)
-		plt.close()
-
-	#groups
-	#======
-	if args.cluster_groups_file != "no":
-		for g_index in groups_sampled:
-			#filenames
-			filename_png = os.getcwd() + '/' + str(args.output_folder) + '/2_groups/3_residues/png/1_3_density_profile_residues_' + str(groups_labels[g_index]) +'.png'
-			filename_svg = os.getcwd() + '/' + str(args.output_folder) + '/2_groups/3_residues/1_3_density_profile_residues_' + str(groups_labels[g_index]) +'.svg'
-	
-			#create figure
-			fig = plt.figure(figsize=(8, 6.2))
-			if c_size == "all sizes":
-				fig.suptitle("Relative residues frequency along z around TM clusters")
-			else:
-				fig.suptitle("Relative residues frequency along z around TM clusters of sizes " + str(groups_labels[g_index]))
-	
-			#plot data
-			ax = fig.add_subplot(111)
-			for res in residues_def["labels"]:
-				plt.plot(range(0,2*bins_nb), density_residues_groups_pc[g_index][res], color = residues_def["colour"][res], label = str(res))
-			plt.plot(range(0,2*bins_nb), density_particles_groups_pc[g_index]["peptide"], color = particles_def["colour"]["peptide"], label = "peptide")
-			if water_pres:
-				plt.plot(range(0,2*bins_nb), density_particles_groups_pc[g_index]["water"], color = particles_def["colour"]["water"], label = "water")
-			plt.vlines(np.floor(z_upper/float(args.slices_thick)) + bins_nb, 0, max_density_residues_pc, linestyles = 'dashed')
-			plt.vlines(np.floor(z_lower/float(args.slices_thick)) + bins_nb, 0, max_density_residues_pc, linestyles = 'dashed')
-			plt.vlines(bins_nb, 0, max_density_residues_pc, linestyles = 'dashdot')
-			fontP.set_size("small")
-			ax.legend(prop=fontP)
-			plt.xlabel('z distance to bilayer center [$\AA$]')
-			plt.ylabel('relative residues particles frequency [$\AA^{-3}$]')
-			
-			#save figure
-			ax.set_xlim(0, 2*bins_nb)
-			ax.set_ylim(0, max_density_residues_pc)
-			ax.spines['top'].set_visible(False)
-			ax.spines['right'].set_visible(False)
-			ax.xaxis.set_ticks_position('bottom')
-			ax.yaxis.set_ticks_position('left')
-			ax.xaxis.set_major_locator(MaxNLocator(nbins=10))
-			ax.yaxis.set_major_locator(MaxNLocator(nbins=7))
-			xlabel = ax.get_xticks().tolist()
-			for tick_index in range(0,len(xlabel)):
-				xlabel[tick_index] -= bins_nb
-			ax.set_xticklabels(xlabel)
-			ax.xaxis.labelpad = 20
-			ax.yaxis.labelpad = 20
-			plt.setp(ax.xaxis.get_majorticklabels(), fontsize = "small")
-			plt.setp(ax.yaxis.get_majorticklabels(), fontsize = "small")
-			plt.subplots_adjust(top = 0.9, bottom = 0.15, left = 0.15, right = 0.85)
-			fig.savefig(filename_png)
-			fig.savefig(filename_svg)
-			plt.close()
-				
-	return
-def density_graph_charges():											#DONE
+def density_graph_charges():
 			
 	#sizes
 	#=====
@@ -1268,21 +705,23 @@ def density_graph_charges():											#DONE
 # ALGORITHM
 ##########################################################################################
 
-#data loading
+#=========================================================================================
+# data loading
+#=========================================================================================
 set_charges()
 load_MDA_universe()
-
-print "\nCalculating density profiles..."
+bins = np.zeros((nb_frames_to_process, args.slices))
+potential = np.zeros((nb_frames_to_process, args.slices))
+charge_density = np.zeros((nb_frames_to_process, args.slices))
 
 #=========================================================================================
 # generate data
 #=========================================================================================
-
+print "\nCalculating electrosatic potential..."
 #case: structure only
 #--------------------
 if args.xtcfilename=="no":
 	calculate_density(U.trajectory.ts.dimensions)
-
 #case: browse xtc frames
 #-----------------------
 else:
@@ -1302,32 +741,9 @@ calculate_stats()
 #=========================================================================================
 # produce outputs
 #=========================================================================================
-
 print "\nWriting outputs..."
-
-#case: proteins
-#--------------
-if protein_pres:
-	if np.size(sizes_sampled) > 0:
-		density_write_particles()
-		density_graph_particles()
-		if args.residuesfilename != "no":
-			density_write_residues()
-			density_graph_residues()
-		if args.chargesfilename != "no":
-			density_write_charges()
-			density_graph_charges()
-	else:
-		print "Warning: no TM cluster identified!"
-
-#case: no proteins
-#-----------------
-else:
-	density_write_particles()
-	density_graph_particles()
-	if args.chargesfilename != "no":
-		density_write_charges()
-		density_graph_charges()
+density_write_charges()
+density_graph_charges()
 	
 #=========================================================================================
 # exit
