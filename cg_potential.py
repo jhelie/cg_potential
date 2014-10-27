@@ -265,6 +265,8 @@ else:
 
 global f_factor
 global bins
+global vols
+global thicks
 global potential
 global charge_density
 global bins_stats
@@ -273,8 +275,8 @@ global charge_density_stats
 
 f_factor = 138.935485/float(args.er)
 bins_stats = {}
-bins_stats["avg"] = np.zeros(args.slices)
-bins_stats["std"] = np.zeros(args.slices)
+bins_stats["avg"] = np.zeros(args.slices+1)
+bins_stats["std"] = np.zeros(args.slices+1)
 potential_stats = {}
 potential_stats["avg"] = np.zeros(args.slices)
 potential_stats["std"] = np.zeros(args.slices)
@@ -401,7 +403,9 @@ def calculate_potential(f_index, box_dim):
 	#define bins
 	tmp_bins = np.linspace(0,box_dim[2],args.slices+1)
 	
-	#store their z values
+	#store their z values and volume
+	thicks[f_index] = tmp_bins[1]-tmp_bins[0]
+	vols[f_index] = thicks[f_index] * box_dim[0]*box_dim[1]
 	bins[f_index,:] = tmp_bins - bilayer.centerOfGeometry()[2]
 	
 	#calculate charge density in each bin
@@ -412,7 +416,7 @@ def calculate_potential(f_index, box_dim):
 			tmp_coord = tmp_q_sele.coordinates()
 			tmp_bins_nb += np.histogram(tmp_coord[:,2], tmp_bins)[0] * charges_groupsw]["value"]
 	
-	
+	#
 	
 	return
 
@@ -420,16 +424,29 @@ def calculate_stats():
 	
 	for s in range(0, args.slices):
 		#bin z position
-		bins_stats["avg"] = np.average(bins[:,s])
-		bins_stats["std"] = np.std(bins[:,s])
-		
+		bins_stats["avg"][s] = np.average(bins[:,s])
+		bins_stats["std"][s] = np.std(bins[:,s])
+
+		#slice thickness and volumes volume
+		thick_stats["avg"][s] = np.average(bins[:,s])
+		thick_stats["std"][s] = np.std(thicks)
+		vol_stats["avg"][s] = np.average(bins[:,s])
+		vol_stats["std"][s] = np.std(bins[:,s])
+
 		#charge density
-		charge_density_stats["avg"] = np.average(charge_density[:,s])
-		charge_density_stats["std"] = np.std(charge_density[:,s])	
+		charge_density_stats["avg"][s] = np.average(charge_density[:,s])
+		charge_density_stats["std"][s] = np.std(charge_density[:,s])	
 		
 		#potential 
-		potential_stats["avg"] = np.average(potential[:,s])
-		potential_stats["std"] = np.std(potential[:,s])
+		potential_stats["avg"][s] = np.average(potential[:,s])
+		potential_stats["std"][s] = np.std(potential[:,s])
+	
+	#calculate bin labels
+	#--------------------
+	bins_stats["avg"][args.slices] = np.average(bins[:,args.slices])
+	bins_stats["std"][args.slices] = np.std(bins[:,args.slices])
+	for s in range(0, args.slices):
+		bins_labels[s] = (bins_stats["avg"][s+1]-bins_stats["avg"][s])/float(2)
 	
 	return
 
@@ -439,266 +456,85 @@ def calculate_stats():
 
 def density_write_charges():
 	
-	#sizes
-	#=====
-	for c_size in sizes_sampled + ["all sizes"]:
-
-		#open files
-		if c_size == "all sizes":
-			tmp_file = '1_2_density_profile_charges_all_sizes'
-		else:
-			tmp_file = '1_2_density_profile_charges_' + str(c_size)
-		filename_xvg = os.getcwd() + '/' + str(args.output_folder) + '/1_sizes/2_charges/xvg/' + str(tmp_file) + '.xvg'
-		filename_txt = os.getcwd() + '/' + str(args.output_folder) + '/1_sizes/2_charges/xvg/' + str(tmp_file) + '.txt'
-		output_txt = open(filename_txt, 'w')
-		output_xvg = open(filename_xvg, 'w')
+	#open files
+	filename_xvg = os.getcwd() + '/' + str(args.output_folder) + '/density_profile_charges.xvg'
+	output_xvg = open(filename_xvg, 'w')
+	
+	#general header
+	output_xvg.write("# [charge density profile - written by cg_potential v" + str(version_nb) + "]\n")
+	output_xvg.write("#  -> nb of slices: " + str(args.slices) + " (Angstrom)\n")
+	output_xvg.write("#  -> slices thickness: " + str(round(np.average(thicks),2)) + " (" + str(round(np.std(thicks),2)) + ") (Angstrom)\n")
+	output_xvg.write("#  -> slices volume: " + str(round(np.average(vols),2)) + " (" + str(round(np.std(vols),2)) + ") (Angstrom3)\n")
+	output_xvg.write("# nb of frames which contributed to this profile:\n")
+	output_xvg.write("# -> weight = " + str(nb_frames_to_process) + "\n")
+	
+	#xvg metadata
+	output_xvg.write("@ title \"Charge density profile along z\"\n")
+	output_xvg.write("@ xaxis label \"z distance to bilayer center (Angstrom)\"\n")
+	output_xvg.write("@ yaxis label \"charge density (e.Angstrom-3)\"\n")
+	output_xvg.write("@ autoscale ONREAD xaxes\n")
+	output_xvg.write("@ TYPE XY\n")
+	output_xvg.write("@ view 0.15, 0.15, 0.95, 0.85\n")
+	output_xvg.write("@ legend on\n")
+	output_xvg.write("@ legend box on\n")
+	output_xvg.write("@ legend loctype view\n")
+	output_xvg.write("@ legend 0.98, 0.8\n")
+	output_xvg.write("@ legend length 1\n")
+	output_xvg.write("@ s0 legend \"total\"\n")
+	
+	#data
+	for s in range(0,args.slices):
+		results = str(bins_labels[s])
+		results += str(round(bins_labels[s],2))+ "	" + "{:.6e}".format(charge_density_stats["avg"][s])
+		output_xvg.write(results + "\n")	
+	output_xvg.close()
 		
-		#general header
-		output_txt.write("@[charge density profile - written by cluster_density_profile v" + str(version_nb) + "]\n")
-		output_txt.write("@Use this file as the argument of the -c option of the script 'xvg_animate' in order to make a time lapse movie of the data in 1_2_thickness_species.xvg.\n")
-		output_xvg.write("# [charge density profile - written by cluster_density_profile v" + str(version_nb) + "]\n")
-		output_xvg.write("# cluster detection method:\n")
-		if protein_pres:
-			output_xvg.write("#  -> nb of proteins: " + str(proteins_nb) + "\n")
-			if args.m_algorithm == "min":
-				output_xvg.write("#  -> connectivity based (min distances)\n")
-				output_xvg.write("#  -> contact cutoff = " + str(args.cutoff_connect) + " Angstrom\n")
-			elif args.m_algorithm == "cog":
-				output_xvg.write("#  -> connectivity based (cog distances)\n")
-				output_xvg.write("#  -> contact cutoff = " + str(args.cutoff_connect) + " Angstrom\n")
-			else:
-				output_xvg.write("#  -> density based (DBSCAN)\n")
-				output_xvg.write("#  -> search radius = " + str(args.dbscan_dist) + " Angstrom, nb of neighbours = " + str(args.dbscan_nb) + "\n")
-		output_xvg.write("# volume properties:\n")
-		output_xvg.write("#  -> cylinder radius: " + str(args.slices_radius) + " (Angstrom)\n")
-		output_xvg.write("#  -> slices thickness: " + str(args.slices_thick) + " (Angstrom)\n")
-		output_xvg.write("#  -> slices volume: " + str(round(slice_volume,2)) + " (Angstrom3)\n")
-		output_xvg.write("# selection statistics (% of total particles within volume):\n")
-		for charge_g in charges_groups.keys():
-			output_xvg.write("#  -> " + str(charge_g) + ": " + str(sizes_coverage["charges"]["avg"][c_size][charge_g]) + "% (" + str(sizes_coverage["charges"]["std"][c_size][charge_g]) + ")\n")
-		if protein_pres:
-			output_xvg.write("# nb of clusters which contributed to this profile:\n")
-			output_xvg.write("# -> weight = " + str(sizes_nb_clusters[c_size]) + "\n")
-		else:
-			output_xvg.write("# nb of frames which contributed to this profile:\n")
-			output_xvg.write("# -> weight = " + str(nb_frames_to_process) + "\n")
-		
-		#xvg metadata
-		if c_size == "all sizes":
-			output_xvg.write("@ title \"Charge density profile along z around TM clusters\"\n")
-		else:
-			output_xvg.write("@ title \"Charge density profile along z around TM clusters of size " + str(c_size) + "\"\n")
-		output_xvg.write("@ xaxis label \"z distance to bilayer center (Angstrom)\"\n")
-		output_xvg.write("@ yaxis label \"charge density (e.Angstrom-3)\"\n")
-		output_xvg.write("@ autoscale ONREAD xaxes\n")
-		output_xvg.write("@ TYPE XY\n")
-		output_xvg.write("@ view 0.15, 0.15, 0.95, 0.85\n")
-		output_xvg.write("@ legend on\n")
-		output_xvg.write("@ legend box on\n")
-		output_xvg.write("@ legend loctype view\n")
-		output_xvg.write("@ legend 0.98, 0.8\n")
-		output_xvg.write("@ legend length " + str(len(charges_groups.keys()) + 1) + "\n")
-		charges_groups_keys = charges_groups.keys()
-		for q_index in range(0,len(charges_groups_keys)):
-			charge_group = charges_groups_keys[q_index]
-			output_xvg.write("@ s" + str(q_index) + " legend \"" + str(charge_group) + "\"\n")
-			output_txt.write(str(tmp_file) + "," + str(q_index) + "," + str(charge_group) + "," + mcolors.rgb2hex(mcolorconv.to_rgb(charges_colours[charge_group])) + "\n")
-		output_xvg.write("@ s" + str(len(charges_groups.keys())) + " legend \"total\"\n")
-		output_txt.write(str(tmp_file) + "," + str(len(charges_groups.keys())+1) + ",total," + mcolors.rgb2hex(mcolorconv.to_rgb(charges_colours["total"])) + "\n")
-		output_txt.close()
-		
-		#data
-		for n in range(0,2*bins_nb):
-			results = str(bins_labels[n])
-			for q_index in range(0,len(charges_groups_keys)):
-				charge_g = charges_groups_keys[q_index]
-				results += "	" + "{:.6e}".format(density_charges_sizes[c_size][charge_g][n])
-			results += "	" + "{:.6e}".format(density_charges_sizes[c_size]["total"][n])
-			output_xvg.write(results + "\n")	
-		output_xvg.close()
-		
-	#groups
-	#======
-	if args.cluster_groups_file != "no":
-		for g_index in groups_sampled:
-			#open files
-			tmp_file = '2_2_density_profile_charges_' + str(groups_labels[g_index])
-			filename_xvg = os.getcwd() + '/' + str(args.output_folder) + '/2_groups/2_charges/xvg/' + str(tmp_file) + '.xvg'
-			filename_txt = os.getcwd() + '/' + str(args.output_folder) + '/2_groups/2_charges/xvg/' + str(tmp_file) + '.txt'
-			output_txt = open(filename_txt, 'w')
-			output_xvg = open(filename_xvg, 'w')
-			
-			#general header
-			output_txt.write("@[charge density profile - written by cluster_density_profile v" + str(version_nb) + "]\n")
-			output_txt.write("@Use this file as the argument of the -c option of the script 'xvg_animate' in order to make a time lapse movie of the data in 1_2_thickness_species.xvg.\n")
-			output_xvg.write("# [charge density profile - written by cluster_density_profile v" + str(version_nb) + "]\n")
-			output_xvg.write("# cluster detection method:\n")
-			output_xvg.write("#  -> nb of proteins: " + str(proteins_nb) + "\n")
-			if args.m_algorithm == "min":
-				output_xvg.write("#  -> connectivity based (min distances)\n")
-				output_xvg.write("#  -> contact cutoff = " + str(args.cutoff_connect) + " Angstrom\n")
-			elif args.m_algorithm == "cog":
-				output_xvg.write("#  -> connectivity based (cog distances)\n")
-				output_xvg.write("#  -> contact cutoff = " + str(args.cutoff_connect) + " Angstrom\n")
-			else:
-				output_xvg.write("#  -> density based (DBSCAN)\n")
-				output_xvg.write("#  -> search radius = " + str(args.dbscan_dist) + " Angstrom, nb of neighbours = " + str(args.dbscan_nb) + "\n")
-			output_xvg.write("# volume properties:\n")
-			output_xvg.write("#  -> cylinder radius: " + str(args.slices_radius) + " (Angstrom)\n")
-			output_xvg.write("#  -> slices thickness: " + str(args.slices_thick) + " (Angstrom)\n")
-			output_xvg.write("#  -> slices volume: " + str(round(slice_volume,2)) + " (Angstrom3)\n")
-			output_xvg.write("# selection statistics (% of total particles within volume):\n")
-			for charge_g in charges_groups.keys():
-				output_xvg.write("#  -> " + str(charge_g) + ": " + str(groups_coverage["charges"]["avg"][g_index][charge_g]) + "% (" + str(groups_coverage["charges"]["std"][g_index][charge_g]) + ")\n")
-			output_xvg.write("# nb of clusters which contributed to this profile:\n")
-			output_xvg.write("# -> weight = " + str(groups_nb_clusters[g_index]) + "\n")
-			
-			#xvg metadata
-			if c_size == "all sizes":
-				output_xvg.write("@ title \"Charge density profile along z around TM clusters\"\n")
-			else:
-				output_xvg.write("@ title \"Charge density profile along z around TM clusters of sizes " + str(groups_labels[g_index]) + "\"\n")
-			output_xvg.write("@ xaxis label \"z distance to bilayer center (Angstrom)\"\n")
-			output_xvg.write("@ yaxis label \"charge density (e.Angstrom-3)\"\n")
-			output_xvg.write("@ autoscale ONREAD xaxes\n")
-			output_xvg.write("@ TYPE XY\n")
-			output_xvg.write("@ view 0.15, 0.15, 0.95, 0.85\n")
-			output_xvg.write("@ legend on\n")
-			output_xvg.write("@ legend box on\n")
-			output_xvg.write("@ legend loctype view\n")
-			output_xvg.write("@ legend 0.98, 0.8\n")
-			output_xvg.write("@ legend length " + str(len(charges_groups.keys()) + 1) + "\n")
-			charges_groups_keys = charges_groups.keys()
-			for q_index in range(0,len(charges_groups_keys)):
-				charge_group = charges_groups_keys[q_index]
-				output_xvg.write("@ s" + str(q_index) + " legend \"" + str(charge_group) + "\"\n")
-				output_txt.write(str(tmp_file) + "," + str(q_index) + "," + str(charge_group) + "," + mcolors.rgb2hex(mcolorconv.to_rgb(charges_colours[charge_group])) + "\n")
-			output_xvg.write("@ s" + str(len(charges_groups.keys())) + " legend \"total\"\n")
-			output_txt.write(str(tmp_file) + "," + str(len(charges_groups.keys())+1) + ",total," + mcolors.rgb2hex(mcolorconv.to_rgb(charges_colours["total"])) + "\n")
-			output_txt.close()
-			
-			#data
-			for n in range(0,2*bins_nb):
-				results = str(bins_labels[n])
-				for q_index in range(0,len(charges_groups_keys)):
-					charge_g = charges_groups_keys[q_index]
-					results += "	" + "{:.6e}".format(density_charges_groups[g_index][charge_g][n])
-				results += "	" + "{:.6e}".format(density_charges_groups[g_index]["total"][n])
-				output_xvg.write(results + "\n")	
-			output_xvg.close()
-
 	return
 
 def density_graph_charges():
 			
-	#sizes
-	#=====
-	for c_size in sizes_sampled + ["all sizes"]:
-		#filenames
-		if c_size == "all sizes":
-			filename_png = os.getcwd() + '/' + str(args.output_folder) + '/1_sizes/2_charges/png/1_2_density_profile_charges_all_sizes.png'
-			filename_svg = os.getcwd() + '/' + str(args.output_folder) + '/1_sizes/2_charges/1_2_density_profile_charges_all_sizes.svg'
-		else:
-			filename_png = os.getcwd() + '/' + str(args.output_folder) + '/1_sizes/2_charges/png/1_2_density_profile_charges_' + str(c_size) +'.png'
-			filename_svg = os.getcwd() + '/' + str(args.output_folder) + '/1_sizes/2_charges/1_2_density_profile_charges_' + str(c_size) +'.svg'
+	#filenames
+	filename_svg = os.getcwd() + '/' + str(args.output_folder) + '/density_profile_charges.svg'
+	filename_png = os.getcwd() + '/' + str(args.output_folder) + '/density_profile_charges.png'
 
-		#create figure
-		fig = plt.figure(figsize=(8, 6.2))
-		if c_size == "all sizes":
-			fig.suptitle("Charge density profile in TM clusters")
-		else:
-			fig.suptitle("Charge density profile TM clusters of size " + str(c_size))
+	#create figure
+	fig = plt.figure(figsize=(8, 6.2))
+	fig.suptitle("Charge density profile along z")
 
-		#plot data
-		ax = fig.add_subplot(111)
-		for charge_g in charges_groups.keys() + ["total"]:
-			if charge_g == "total":
-				plt.plot(range(0,2*bins_nb), density_charges_sizes[c_size][charge_g], color = charges_colours[charge_g], label = str(charge_g), linewidth = 2)
-			else:
-				plt.plot(range(0,2*bins_nb), density_charges_sizes[c_size][charge_g], color = charges_colours[charge_g], label = str(charge_g))
-		plt.vlines(np.floor(z_upper/float(args.slices_thick)) + bins_nb, min_density_charges, max_density_charges, linestyles = 'dashed')
-		plt.vlines(np.floor(z_lower/float(args.slices_thick)) + bins_nb, min_density_charges, max_density_charges, linestyles = 'dashed')
-		plt.vlines(bins_nb, min_density_charges, max_density_charges, linestyles = 'dashdot')
-		plt.hlines(0, 0, 2*bins_nb)
-		fontP.set_size("small")
-		ax.legend(prop=fontP)
-		plt.xlabel('z distance to bilayer center [$\AA$]')
-		plt.ylabel('average charge density [$e.\AA^{-3}$]')
-		
-		#save figure
-		ax.set_xlim(0, 2*bins_nb)
-		ax.set_ylim(min_density_charges, max_density_charges)
-		ax.spines['top'].set_visible(False)
-		ax.spines['right'].set_visible(False)
-		ax.xaxis.set_ticks_position('bottom')
-		ax.yaxis.set_ticks_position('left')
-		ax.xaxis.set_major_locator(MaxNLocator(nbins=10))
-		ax.yaxis.set_major_locator(MaxNLocator(nbins=7))
-		xlabel = ax.get_xticks().tolist()
-		for tick_index in range(0,len(xlabel)):
-			xlabel[tick_index] -= bins_nb
-		ax.set_xticklabels(xlabel)
-		ax.xaxis.labelpad = 20
-		ax.yaxis.labelpad = 20
-		plt.setp(ax.xaxis.get_majorticklabels(), fontsize = "small")
-		plt.setp(ax.yaxis.get_majorticklabels(), fontsize = "small")
-		plt.subplots_adjust(top = 0.9, bottom = 0.15, left = 0.15, right = 0.85)
-		fig.savefig(filename_png)
-		fig.savefig(filename_svg)
-		plt.close()
-
-	#groups
-	#======
-	if args.cluster_groups_file != "no":
-		for g_index in groups_sampled:
-			#filenames
-			filename_png = os.getcwd() + '/' + str(args.output_folder) + '/2_groups/2_charges/png/2_2_density_profile_charges_' + str(groups_labels[g_index]) +'.png'
-			filename_svg = os.getcwd() + '/' + str(args.output_folder) + '/2_groups/2_charges/2_2_density_profile_charges_' + str(groups_labels[g_index]) +'.svg'
+	#plot data
+	ax = fig.add_subplot(111)
+	plt.plot(range(0,args.slices), charge_density_stats["avg"], color = 'k', linewidth = 2)
+	#plt.vlines(np.floor(z_upper/float(args.slices_thick)) + bins_nb, min_density_charges, max_density_charges, linestyles = 'dashed')
+	#plt.vlines(np.floor(z_lower/float(args.slices_thick)) + bins_nb, min_density_charges, max_density_charges, linestyles = 'dashed')
+	#plt.vlines(bins_nb, min_density_charges, max_density_charges, linestyles = 'dashdot')
+	#plt.hlines(0, 0, 2*bins_nb)
+	fontP.set_size("small")
+	ax.legend(prop=fontP)
+	plt.xlabel('z distance to bilayer center [$\AA$]')
+	plt.ylabel('average charge density [$e.\AA^{-3}$]')
 	
-			#create figure
-			fig = plt.figure(figsize=(8, 6.2))
-			if g_index == "all groups":
-				fig.suptitle("Charge density profile in TM clusters")
-			else:
-				fig.suptitle("Charge density profile in TM clusters of sizes " + str(groups_labels[g_index]))
-	
-			#plot data
-			ax = fig.add_subplot(111)
-			for charge_g in charges_groups.keys() + ["total"]:
-				if charge_g == "total":
-					plt.plot(range(0,2*bins_nb), density_charges_groups[g_index][charge_g], color = charges_colours[charge_g], label = str(charge_g), linewidth = 2)
-				else:
-					plt.plot(range(0,2*bins_nb), density_charges_groups[g_index][charge_g], color = charges_colours[charge_g], label = str(charge_g))
-			plt.vlines(np.floor(z_upper/float(args.slices_thick)) + bins_nb, min_density_charges, max_density_charges, linestyles = 'dashed')
-			plt.vlines(np.floor(z_lower/float(args.slices_thick)) + bins_nb, min_density_charges, max_density_charges, linestyles = 'dashed')
-			plt.vlines(bins_nb, min_density_charges, max_density_charges, linestyles = 'dashdot')
-			plt.hlines(0, 0, 2*bins_nb)
-			fontP.set_size("small")
-			ax.legend(prop=fontP)
-			plt.xlabel('z distance to bilayer center [$\AA$]')
-			plt.ylabel('average charge density [$e.\AA^{-3}$]')
-			
-			#save figure
-			ax.set_xlim(0, 2*bins_nb)
-			ax.set_ylim(min_density_charges, max_density_charges)
-			ax.spines['top'].set_visible(False)
-			ax.spines['right'].set_visible(False)
-			ax.xaxis.set_ticks_position('bottom')
-			ax.yaxis.set_ticks_position('left')
-			ax.xaxis.set_major_locator(MaxNLocator(nbins=10))
-			ax.yaxis.set_major_locator(MaxNLocator(nbins=7))
-			xlabel = ax.get_xticks().tolist()
-			for tick_index in range(0,len(xlabel)):
-				xlabel[tick_index] -= bins_nb
-			ax.set_xticklabels(xlabel)
-			ax.xaxis.labelpad = 20
-			ax.yaxis.labelpad = 20
-			plt.setp(ax.xaxis.get_majorticklabels(), fontsize = "small")
-			plt.setp(ax.yaxis.get_majorticklabels(), fontsize = "small")
-			plt.subplots_adjust(top = 0.9, bottom = 0.15, left = 0.15, right = 0.85)
-			fig.savefig(filename_png)
-			fig.savefig(filename_svg)
-			plt.close()
+	#save figure
+	ax.set_xlim(0, args.slices)
+	ax.set_ylim(min_density_charges, max_density_charges)
+	ax.spines['top'].set_visible(False)
+	ax.spines['right'].set_visible(False)
+	ax.xaxis.set_ticks_position('bottom')
+	ax.yaxis.set_ticks_position('left')
+	ax.xaxis.set_major_locator(MaxNLocator(nbins=10))
+	ax.yaxis.set_major_locator(MaxNLocator(nbins=7))
+	xlabel = ax.get_xticks().tolist()
+	for tick_index in range(0,len(xlabel)):
+		xlabel[tick_index] = bins_nb
+	ax.set_xticklabels(xlabel)
+	ax.xaxis.labelpad = 20
+	ax.yaxis.labelpad = 20
+	plt.setp(ax.xaxis.get_majorticklabels(), fontsize = "small")
+	plt.setp(ax.yaxis.get_majorticklabels(), fontsize = "small")
+	plt.subplots_adjust(top = 0.9, bottom = 0.15, left = 0.15, right = 0.85)
+	fig.savefig(filename_png)
+	fig.savefig(filename_svg)
+	plt.close()
+
 	return
 
 ##########################################################################################
@@ -710,7 +546,12 @@ def density_graph_charges():
 #=========================================================================================
 set_charges()
 load_MDA_universe()
-bins = np.zeros((nb_frames_to_process, args.slices))
+
+#update global variables
+thicks = np.zeros(nb_frames_to_process)
+vols = np.zeros(nb_frames_to_process)
+bins = np.zeros((nb_frames_to_process, args.slices+1))
+bins_labels = np.zeros(args.slices)
 potential = np.zeros((nb_frames_to_process, args.slices))
 charge_density = np.zeros((nb_frames_to_process, args.slices))
 
