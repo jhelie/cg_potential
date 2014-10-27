@@ -237,9 +237,9 @@ elif not os.path.isfile(args.xtcfilename):
 #=========================================================================================
 if args.output_folder == "no":
 	if args.xtcfilename == "no":
-		args.output_folder = "cluster_density_profile_" + args.grofilename[:-4]
+		args.output_folder = "cg_potential_" + args.grofilename[:-4]
 	else:
-		args.output_folder = "cluster_density_profile_" + args.xtcfilename[:-4]
+		args.output_folder = "cg_potential_" + args.xtcfilename[:-4]
 if os.path.isdir(args.output_folder):
 	print "Error: folder " + str(args.output_folder) + " already exists, choose a different output name via -o."
 	sys.exit(1)
@@ -327,6 +327,7 @@ def load_MDA_universe():
 	global residues_list
 	global water_pres
 	global water_sele
+	global bilayer
 	f_start = 0
 		
 	#load universe
@@ -409,29 +410,21 @@ def calculate_potential(f_index, box_dim):
 	bins[f_index,:] = tmp_bins - bilayer.centerOfGeometry()[2]
 	
 	#calculate charge density in each bin
-	tmp_bins_nb = np.zeros(2*bins_nb)
 	for q in charges_groups.keys():
 		tmp_q_sele = charges_groups[q]["sele"]
 		if tmp_q_sele.numberOfAtoms() > 0:
 			tmp_coord = tmp_q_sele.coordinates()
-			tmp_bins_nb += np.histogram(tmp_coord[:,2], tmp_bins)[0] * charges_groupsw]["value"]
+			charge_density[f_index,:] += np.histogram(tmp_coord[:,2], tmp_bins)[0] * charges_groups[q]["value"]
 	
-	#
+	#calculate potential
 	
 	return
-
 def calculate_stats():
 	
 	for s in range(0, args.slices):
 		#bin z position
 		bins_stats["avg"][s] = np.average(bins[:,s])
 		bins_stats["std"][s] = np.std(bins[:,s])
-
-		#slice thickness and volumes volume
-		thick_stats["avg"][s] = np.average(bins[:,s])
-		thick_stats["std"][s] = np.std(thicks)
-		vol_stats["avg"][s] = np.average(bins[:,s])
-		vol_stats["std"][s] = np.std(bins[:,s])
 
 		#charge density
 		charge_density_stats["avg"][s] = np.average(charge_density[:,s])
@@ -490,7 +483,6 @@ def density_write_charges():
 	output_xvg.close()
 		
 	return
-
 def density_graph_charges():
 			
 	#filenames
@@ -508,14 +500,14 @@ def density_graph_charges():
 	#plt.vlines(np.floor(z_lower/float(args.slices_thick)) + bins_nb, min_density_charges, max_density_charges, linestyles = 'dashed')
 	#plt.vlines(bins_nb, min_density_charges, max_density_charges, linestyles = 'dashdot')
 	#plt.hlines(0, 0, 2*bins_nb)
-	fontP.set_size("small")
-	ax.legend(prop=fontP)
+	#fontP.set_size("small")
+	#ax.legend(prop=fontP)
 	plt.xlabel('z distance to bilayer center [$\AA$]')
 	plt.ylabel('average charge density [$e.\AA^{-3}$]')
 	
 	#save figure
 	ax.set_xlim(0, args.slices)
-	ax.set_ylim(min_density_charges, max_density_charges)
+	#ax.set_ylim(min_density_charges, max_density_charges)
 	ax.spines['top'].set_visible(False)
 	ax.spines['right'].set_visible(False)
 	ax.xaxis.set_ticks_position('bottom')
@@ -523,8 +515,8 @@ def density_graph_charges():
 	ax.xaxis.set_major_locator(MaxNLocator(nbins=10))
 	ax.yaxis.set_major_locator(MaxNLocator(nbins=7))
 	xlabel = ax.get_xticks().tolist()
-	for tick_index in range(0,len(xlabel)):
-		xlabel[tick_index] = bins_nb
+	#for tick_index in range(0,len(xlabel)):
+	#	xlabel[tick_index] -= bins_nb
 	ax.set_xticklabels(xlabel)
 	ax.xaxis.labelpad = 20
 	ax.yaxis.labelpad = 20
@@ -562,7 +554,7 @@ print "\nCalculating electrosatic potential..."
 #case: structure only
 #--------------------
 if args.xtcfilename=="no":
-	calculate_density(U.trajectory.ts.dimensions)
+	calculate_potential(0,U.trajectory.ts.dimensions)
 #case: browse xtc frames
 #-----------------------
 else:
@@ -571,7 +563,7 @@ else:
 		progress = '\r -processing frame ' + str(f_index+1) + '/' + str(nb_frames_to_process) + ' (every ' + str(args.frames_dt) + ' frame(s) from frame ' + str(f_start) + ' to frame ' + str(f_end) + ' out of ' + str(nb_frames_xtc) + ')      '  
 		sys.stdout.flush()
 		sys.stdout.write(progress)							
-		calculate_density(U.trajectory.ts.dimensions)
+		calculate_potential(f_index, U.trajectory.ts.dimensions)
 	print ""
 
 #=========================================================================================
