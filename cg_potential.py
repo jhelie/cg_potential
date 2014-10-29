@@ -315,7 +315,15 @@ def set_charges():
 	charges_groups["NC3"] = {}
 	charges_groups["NC3"]["value"] = 1
 	charges_groups["NC3"]["sele_string"] = "name NC3"
-		
+
+	charges_groups["WP"] = {}
+	charges_groups["WP"]["value"] = 0.46
+	charges_groups["WP"]["sele_string"] = "name WP"
+
+	charges_groups["WM"] = {}
+	charges_groups["WM"]["value"] = -0.46
+	charges_groups["WM"]["sele_string"] = "name WM"
+
 	return
 def load_MDA_universe():
 	
@@ -330,7 +338,9 @@ def load_MDA_universe():
 	global residues_list
 	global water_pres
 	global water_sele
-	global bilayer
+	global leaflet_sele
+	global upper_sele
+	global lower_sele
 	f_start = 0
 		
 	#load universe
@@ -379,9 +389,12 @@ def load_MDA_universe():
 		frames_to_process = map(lambda f:f_start + args.frames_dt*f, range(0,(f_end - f_start)//args.frames_dt+tmp_offset))
 		nb_frames_to_process = len(frames_to_process)
 
-	#check 'bilayer' selection (only useful to center the z coordinates)
-	#-------------------------------------------------------------------
-	bilayer = U.selectAtoms("name PO4")
+	#identify leaflets the lazy way (in any case we need to assume to a plane bilayer as we plot against z so no need to be fancy)
+	#------------------------------
+	leaflet_sele = U.selectAtoms("name PO4")
+	tmp_lipids_avg_z = leaflet_sele.centerOfGeometry()[2]
+	upper_sele = leaflet_sele.selectAtoms("prop z > " + str(tmp_lipids_avg_z))
+	lower_sele = leaflet_sele.selectAtoms("prop z < " + str(tmp_lipids_avg_z))
 
 	#create charged particles selections
 	#-----------------------------------
@@ -407,10 +420,15 @@ def calculate_potential(f_index, box_dim):
 	#define bins
 	tmp_bins = np.linspace(0,box_dim[2],args.slices+1)
 	
+	#store bilayer info
+	tmp_mid = (upper_sele.centerOfGeometry()[2] + lower_sele.centerOfGeometry()[2]) / float(2)
+	upper[f_index] = upper_sele.centerOfGeometry()[2] - tmp_mid
+	lower[f_index] = lower_sele.centerOfGeometry()[2] - tmp_mid
+	
 	#store their z values and volume
 	thicks[f_index] = tmp_bins[1]-tmp_bins[0]
 	vols[f_index] = thicks[f_index] * box_dim[0]*box_dim[1]
-	bins[f_index,:] = tmp_bins - bilayer.centerOfGeometry()[2]
+	bins[f_index,:] = tmp_bins - tmp_mid
 	
 	#calculate charge density in each bin
 	for q in charges_groups.keys():
@@ -438,6 +456,17 @@ def calculate_potential(f_index, box_dim):
 	return
 def calculate_stats():
 	
+	global upper_avg
+	global lower_avg
+	global bins_labels
+	global charge_density
+	global potential
+	
+	#normalise charge density and potential
+	#--------------------------------------
+	charge_density = charge_density / float(np.average(vols)) * np.average(thicks) * args.rc * args.rc * 100
+	potential = potential / float(np.average(vols)) * np.average(thicks) * args.rc * args.rc * 100
+
 	for s in range(0, args.slices):
 		#bin z position
 		bins_stats["avg"][s] = np.average(bins[:,s])
@@ -451,9 +480,10 @@ def calculate_stats():
 		potential_stats["avg"][s] = np.average(potential[:,s])
 		potential_stats["std"][s] = np.std(potential[:,s])
 	
-	#calculate bin labels
-	#--------------------
-	global bins_labels
+	#calculate bin labels and leaflets positions
+	#-------------------------------------------
+	upper_avg = np.average(upper)
+	lower_avg = np.average(lower)
 	bins_stats["avg"][args.slices] = np.average(bins[:,args.slices])
 	bins_stats["std"][args.slices] = np.std(bins[:,args.slices])
 	for s in range(0, args.slices):
@@ -531,15 +561,14 @@ def density_write_potential():
 	
 	#data
 	for s in range(0,args.slices):
-		results = str(bins_labels[s])
-		results += str(round(bins_labels[s],2))+ "	" + "{:.6e}".format(potential_stats["avg"][s])
+		results = str(round(bins_labels[s],2))+ "	" + "{:.6e}".format(potential_stats["avg"][s])
 		output_xvg.write(results + "\n")	
 	output_xvg.close()
 		
 	return
 
 def density_graph_charges():
-			
+		
 	#filenames
 	filename_svg = os.getcwd() + '/' + str(args.output_folder) + '/density_profile_charges.svg'
 	filename_png = os.getcwd() + '/' + str(args.output_folder) + '/density_profile_charges.png'
@@ -550,18 +579,16 @@ def density_graph_charges():
 
 	#plot data
 	ax = fig.add_subplot(111)
-	plt.plot(range(0,args.slices), charge_density_stats["avg"]/float(np.average(vols)), color = 'k', linewidth = 2)
-	#plt.vlines(np.floor(z_upper/float(args.slices_thick)) + bins_nb, min_density_charges, max_density_charges, linestyles = 'dashed')
-	#plt.vlines(np.floor(z_lower/float(args.slices_thick)) + bins_nb, min_density_charges, max_density_charges, linestyles = 'dashed')
-	#plt.vlines(bins_nb, min_density_charges, max_density_charges, linestyles = 'dashdot')
-	#plt.hlines(0, 0, 2*bins_nb)
-	#fontP.set_size("small")
-	#ax.legend(prop=fontP)
+	plt.plot(bins_labels, charge_density_stats["avg"]/float(np.average(vols)), color = 'k', linewidth = 2)
+	plt.vlines(lower_avg, min(charge_density_stats["avg"]/float(np.average(vols))), max(charge_density_stats["avg"]/float(np.average(vols))), linestyles = 'dashed')
+	plt.vlines(upper_avg, min(charge_density_stats["avg"]/float(np.average(vols))), max(charge_density_stats["avg"]/float(np.average(vols))), linestyles = 'dashed')
+	plt.vlines(0, min(charge_density_stats["avg"]/float(np.average(vols))), max(charge_density_stats["avg"]/float(np.average(vols))), linestyles = 'dashdot')
+	plt.hlines(0, min(bins_labels), max(bins_labels))
 	plt.xlabel('z distance to bilayer center [$\AA$]')
 	plt.ylabel('average charge density [$e.\AA^{-3}$]')
 	
 	#save figure
-	ax.set_xlim(0, args.slices)
+	ax.set_xlim(min(bins_labels), max(bins_labels))
 	#ax.set_ylim(min_density_charges, max_density_charges)
 	ax.spines['top'].set_visible(False)
 	ax.spines['right'].set_visible(False)
@@ -569,10 +596,6 @@ def density_graph_charges():
 	ax.yaxis.set_ticks_position('left')
 	ax.xaxis.set_major_locator(MaxNLocator(nbins=10))
 	ax.yaxis.set_major_locator(MaxNLocator(nbins=7))
-	xlabel = ax.get_xticks().tolist()
-	#for tick_index in range(0,len(xlabel)):
-	#	xlabel[tick_index] -= bins_nb
-	ax.set_xticklabels(xlabel)
 	ax.xaxis.labelpad = 20
 	ax.yaxis.labelpad = 20
 	plt.setp(ax.xaxis.get_majorticklabels(), fontsize = "small")
@@ -595,18 +618,16 @@ def density_graph_potential():
 
 	#plot data
 	ax = fig.add_subplot(111)
-	plt.plot(range(0,args.slices), potential_stats["avg"], color = 'k', linewidth = 2)
-	#plt.vlines(np.floor(z_upper/float(args.slices_thick)) + bins_nb, min_density_charges, max_density_charges, linestyles = 'dashed')
-	#plt.vlines(np.floor(z_lower/float(args.slices_thick)) + bins_nb, min_density_charges, max_density_charges, linestyles = 'dashed')
-	#plt.vlines(bins_nb, min_density_charges, max_density_charges, linestyles = 'dashdot')
-	#plt.hlines(0, 0, 2*bins_nb)
-	#fontP.set_size("small")
-	#ax.legend(prop=fontP)
+	plt.plot(bins_labels, potential_stats["avg"], color = 'k', linewidth = 2)
+	plt.vlines(lower_avg, min(potential_stats["avg"]), max(potential_stats["avg"]), linestyles = 'dashed')
+	plt.vlines(upper_avg, min(potential_stats["avg"]), max(potential_stats["avg"]), linestyles = 'dashed')
+	plt.vlines(0, min(potential_stats["avg"]), max(potential_stats["avg"]), linestyles = 'dashdot')
+	plt.hlines(0, min(bins_labels), max(bins_labels))
 	plt.xlabel('z distance to bilayer center [$\AA$]')
 	plt.ylabel('electrostatic potential [V]')
 		
 	#save figure
-	ax.set_xlim(0, args.slices)
+	ax.set_xlim(min(bins_labels), max(bins_labels))
 	#ax.set_ylim(min_density_charges, max_density_charges)
 	ax.spines['top'].set_visible(False)
 	ax.spines['right'].set_visible(False)
@@ -614,13 +635,6 @@ def density_graph_potential():
 	ax.yaxis.set_ticks_position('left')
 	ax.xaxis.set_major_locator(MaxNLocator(nbins=10))
 	ax.yaxis.set_major_locator(MaxNLocator(nbins=7))
-	xlabel = ax.get_xticks().tolist()
-	for tick_index in range(0,len(xlabel)):
-		if int(xlabel[tick_index]) == args.slices:
-			xlabel[tick_index] = round(bins_labels[int(xlabel[tick_index])-1],0)
-		else:
-			xlabel[tick_index] = round(bins_labels[int(xlabel[tick_index])],0)
-	ax.set_xticklabels(xlabel)
 	ax.xaxis.labelpad = 20
 	ax.yaxis.labelpad = 20
 	plt.setp(ax.xaxis.get_majorticklabels(), fontsize = "small")
@@ -646,6 +660,8 @@ load_MDA_universe()
 bins_labels = np.zeros(args.slices)
 thicks = np.zeros(nb_frames_to_process)
 vols = np.zeros(nb_frames_to_process)
+upper = np.zeros(nb_frames_to_process)
+lower = np.zeros(nb_frames_to_process)
 bins = np.zeros((nb_frames_to_process, args.slices+1))
 potential = np.zeros((nb_frames_to_process, args.slices))
 charge_density = np.zeros((nb_frames_to_process, args.slices))
